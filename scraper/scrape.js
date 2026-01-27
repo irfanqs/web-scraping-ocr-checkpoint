@@ -11,7 +11,7 @@ const BASE_URL = "https://kliping.jogjakota.go.id/frontend";
 const DATE_FROM = "2024-01-01"; 
 const DATE_TO = "2025-12-31"; 
 const STEP = 9; // Jumlah data per halaman
-const MAX_PAGES = 1100; // Jumlah maksimum halaman yang akan discan
+const MAX_PAGES = 1; // Jumlah maksimum halaman yang akan discan
 
 const OUT = path.resolve("output");
 const IMG_DIR = path.join(OUT, "images");
@@ -22,6 +22,33 @@ const sleep = ms => new Promise(r => setTimeout(r, ms)); // Fungsi delay / sleep
 //Fungsi untuk membuat hash SHA256 dari file (validasi file)
 function sha256(buffer) {
   return crypto.createHash("sha256").update(buffer).digest("hex");
+}
+
+function formatTanggalIndo(dateStr) {
+  if(!dateStr) return "unknown-date";
+
+  const bulanMap = {
+    Januari: "01",
+    Februari: "02",
+    Maret: "03",
+    April: "04",
+    Mei: "05",
+    Juni: "06",
+    Juli: "07",
+    Agustus: "08",
+    September: "09",
+    Oktober: "10",
+    November: "11",
+    Desember: "12",
+  };
+
+  const match = dateStr.match(/(\d{1,2})\s+([A-Za-z]+)\s+(\d{4})/);
+  if(!match) return "unknown-date";
+
+  const [, dd, bulan, yyyy] = match;
+  const mm = bulanMap[bulan] || "00";
+
+  return `${dd.padStart(2, "0")}-${mm}-${yyyy}`;
 }
 
 async function downloadImage(page, imgUrl, savePath) // Fungsi untuk download gambar dari browser dan simpan ke disk
@@ -132,13 +159,13 @@ async function downloadImage(page, imgUrl, savePath) // Fungsi untuk download ga
         if (!img.src) continue;
 
   //Penamaan file
-        const baseName =
-          img.filename ||
-          `${item.date}_${item.title}_${idx + 1}`;
+        const tanggalFormatted = formatTanggalIndo(item.date);
 
-        const safeName =
-          baseName.replace(/[^a-z0-9]/gi, "_") + ".jpg";
+        const originalName = img.src.split("/").pop() || `image_${idx + 1}.jpg`;
+        // memastikan ekstensi tetap .jpg
+        const finalName = `${tanggalFormatted}_${originalName}`;
 
+        const safeName = finalName.replace(/[^a-z0-9.\-_]/gi, "_");
         const fpath = path.join(dir, safeName);
 
         const imgMeta = await downloadImage(page, img.src, fpath);

@@ -4,7 +4,7 @@ import os
 
 ocr = PaddleOCR(use_angle_cls=True, lang="id")
 
-with open("../output/metadata.json", encoding="utf-8") as f:
+with open("../scraper/output/metadata.json", encoding="utf-8") as f:
     data = json.load(f)
 
 for item in data:
@@ -23,5 +23,5 @@ for item in data:
 
     item["ocr_text"] = texts
 
-with open("../output/metadata_ocr.json", "w", encoding="utf-8") as f:
+with open("../scraper/output/metadata_ocr.json", "w", encoding="utf-8") as f:
     json.dump(data, f, ensure_ascii=False, indent=2)

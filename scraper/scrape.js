@@ -15,9 +15,49 @@ const MAX_PAGES = 1; // Jumlah maksimum halaman yang akan discan
 
 const OUT = path.resolve("output");
 const IMG_DIR = path.join(OUT, "images");
+const CHECKPOINT_FILE = path.join(OUT, "checkpoint.json");
 fs.mkdirSync(IMG_DIR, { recursive: true }); // Buat folder jika belum ada
 
 const sleep = ms => new Promise(r => setTimeout(r, ms)); // Fungsi delay / sleep
+
+// Fungsi untuk load checkpoint
+function loadCheckpoint() {
+  if (fs.existsSync(CHECKPOINT_FILE)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(CHECKPOINT_FILE, "utf-8"));
+      console.log("📋 Checkpoint ditemukan! Melanjutkan dari halaman", data.lastPage + 1, "item", data.lastCard + 1);
+      return data;
+    } catch (err) {
+      console.log("⚠️  Error membaca checkpoint, mulai dari awal");
+      return null;
+    }
+  }
+  return null;
+}
+
+// Fungsi untuk save checkpoint
+function saveCheckpoint(page, card, metadata) {
+  const checkpoint = {
+    lastPage: page,
+    lastCard: card,
+    lastUpdated: new Date().toISOString(),
+    totalItems: metadata.length
+  };
+  fs.writeFileSync(CHECKPOINT_FILE, JSON.stringify(checkpoint, null, 2));
+}
+
+// Fungsi untuk load metadata yang sudah ada
+function loadExistingMetadata() {
+  const metadataFile = path.join(OUT, "metadata.json");
+  if (fs.existsSync(metadataFile)) {
+    try {
+      return JSON.parse(fs.readFileSync(metadataFile, "utf-8"));
+    } catch (err) {
+      return [];
+    }
+  }
+  return [];
+}
 
 //Fungsi untuk membuat hash SHA256 dari file (validasi file)
 function sha256(buffer) {
@@ -93,10 +133,17 @@ async function downloadImage(page, imgUrl, savePath) // Fungsi untuk download ga
     "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8"
   });
 
-  const metadata = []; // Array untuk menyimpan semua metadata hasil scraping
+  // Load checkpoint dan metadata yang sudah ada
+  const checkpoint = loadCheckpoint();
+  const metadata = loadExistingMetadata(); // Load metadata yang sudah tersimpan
+  
+  const startPage = checkpoint ? checkpoint.lastPage : 0;
+  const startCard = checkpoint ? checkpoint.lastCard + 1 : 0;
+  
+  console.log("🚀 Memulai scraping dari halaman", startPage + 1, "item", startCard + 1);
 
   // Loop halaman list (pagination)
-  for (let p = 0; p < MAX_PAGES; p++) {
+  for (let p = startPage; p < MAX_PAGES; p++) {
     const offset = p === 0 ? "" : `/${p * STEP}`;
     const listUrl =
       `${BASE_URL}/home/cari/${DATE_FROM}/${DATE_TO}/all/all/all/null${offset}`;
@@ -122,6 +169,12 @@ async function downloadImage(page, imgUrl, savePath) // Fungsi untuk download ga
 
   // Program masuk ke setiap page berita satu per satu.
     for (let i = 0; i < cards.length; i++) {
+      // Skip item yang sudah diproses di run sebelumnya
+      if (p === startPage && i < startCard) {
+        console.log(` ⏭️  Skipping Page ${p + 1}, Card ${i + 1} (sudah diproses)`);
+        continue;
+      }
+      
       const item = cards[i];
       if (!item.detailUrl) continue;
 
@@ -184,10 +237,25 @@ async function downloadImage(page, imgUrl, savePath) // Fungsi untuk download ga
 
         await sleep(400 + Math.random() * 600); //Delay kecil antar download
       }
+      
+      // Simpan checkpoint setelah selesai memproses setiap card
+      saveCheckpoint(p, i, metadata);
+      
+      // Simpan metadata secara berkala (setiap card selesai)
+      fs.writeFileSync(
+        path.join(OUT, "metadata.json"),
+        JSON.stringify(metadata, null, 2)
+      );
     }
   }
 
-//Setelah semua selesai → simpan ke JSON
+//Setelah semua selesai → hapus checkpoint dan simpan metadata final
+  console.log("✅ Scraping selesai!");
+  if (fs.existsSync(CHECKPOINT_FILE)) {
+    fs.unlinkSync(CHECKPOINT_FILE);
+    console.log("🗑️  Checkpoint dihapus (proses selesai)");
+  }
+  
   fs.writeFileSync(
     path.join(OUT, "metadata.json"),
     JSON.stringify(metadata, null, 2)

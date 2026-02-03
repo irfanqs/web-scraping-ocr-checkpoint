@@ -7,7 +7,7 @@ import StealthPlugin from "puppeteer-extra-plugin-stealth"; // Import plugin ste
 puppeteer.use(StealthPlugin()); // Aktifkan plugin stealth
 
 // Konfigurasi Browser
-const USE_HEADLESS = false; // true = browser tidak terlihat (production), false = browser terlihat (debugging)
+const USE_HEADLESS = true; // true = browser tidak terlihat (production), false = browser terlihat (debugging)
 const CHROME_PATH = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'; // Path Chrome di macOS
 
 // URL utama website target dan batas tanggal pencarian
@@ -227,8 +227,11 @@ async function setupPage(browser) {
     // Filter out common non-critical JavaScript errors
     if (error.message.includes('Unexpected end of input') || 
         error.message.includes('SyntaxError') ||
-        error.message.includes('Unexpected token')) {
-      console.warn('⚠️  Page script warning (non-critical):', error.message);
+        error.message.includes('Unexpected token') ||
+        error.message.includes('JSON.parse') ||
+        error.message.includes('Unexpected end of JSON input')) {
+      // Completely suppress these common non-critical errors
+      // console.warn('⚠️  Page script warning (non-critical):', error.message);
     } else {
       console.error('❌ Page script error:', error.message);
     }
@@ -279,8 +282,11 @@ async function setupPage(browser) {
       // Filter out common non-critical errors
       if (error.message.includes('Unexpected end of input') || 
           error.message.includes('SyntaxError') ||
-          error.message.includes('Unexpected token')) {
-        console.warn('⚠️  Page script warning (non-critical):', error.message);
+          error.message.includes('Unexpected token') ||
+          error.message.includes('JSON.parse') ||
+          error.message.includes('Unexpected end of JSON input')) {
+        // Completely suppress these common non-critical errors
+        // console.warn('⚠️  Page script warning (non-critical):', error.message);
       } else {
         console.error('❌ Page script error:', error.message);
       }

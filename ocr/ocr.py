@@ -1,12 +1,52 @@
 from paddleocr import PaddleOCR
 import json
 import os
+import time
+
+# Konfigurasi Retry System
+MAX_RETRIES = 3
+RETRY_DELAY = 5  # detik
 
 ocr = PaddleOCR(use_angle_cls=True, lang="id")
 
 CHECKPOINT_FILE = "../scraper/output/ocr_checkpoint.json"
 OUTPUT_FILE = "../scraper/output/metadata_ocr.json"
 INPUT_FILE = "../scraper/output/metadata.json"
+
+# Fungsi retry untuk operasi OCR
+def retry_operation(operation, operation_name, max_retries=MAX_RETRIES):
+    """
+    Retry wrapper untuk operasi yang bisa gagal
+    """
+    last_error = None
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            return operation()
+        except Exception as error:
+            last_error = error
+            error_msg = str(error).lower()
+            
+            # Check jika error karena network/IO
+            is_retryable = (
+                'timeout' in error_msg or
+                'connection' in error_msg or
+                'network' in error_msg or
+                'io error' in error_msg or
+                'read' in error_msg
+            )
+            
+            if is_retryable and attempt < max_retries:
+                print(f"⚠️  {operation_name} gagal (attempt {attempt}/{max_retries}): {error}")
+                print(f"🔄 Retry dalam {RETRY_DELAY} detik...")
+                time.sleep(RETRY_DELAY)
+            elif not is_retryable:
+                # Jika bukan error yang bisa di-retry, langsung raise
+                raise error
+    
+    # Jika semua retry gagal
+    print(f"❌ {operation_name} gagal setelah {max_retries} percobaan")
+    raise last_error
 
 # Fungsi untuk load checkpoint OCR
 def load_checkpoint():
@@ -71,16 +111,20 @@ for i in range(start_index, total_items):
     print(f"🔍 Item {i + 1}/{total_items}: Melakukan OCR pada {os.path.basename(img_path)}")
     
     try:
-        result = ocr.ocr(img_path, cls=True)
-        texts = []
+        # Gunakan retry untuk operasi OCR
+        def do_ocr():
+            result = ocr.ocr(img_path, cls=True)
+            texts = []
 
-        if result and result[0]:
-            for line in result[0]:
-                texts.append({
-                    "text": line[1][0],
-                    "confidence": float(line[1][1])
-                })
-
+            if result and result[0]:
+                for line in result[0]:
+                    texts.append({
+                        "text": line[1][0],
+                        "confidence": float(line[1][1])
+                    })
+            return texts
+        
+        texts = retry_operation(do_ocr, f"OCR item {i + 1}")
         item["ocr_text"] = texts
         
         # Simpan progress setiap item selesai

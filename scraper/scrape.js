@@ -13,12 +13,49 @@ const DATE_TO = "2025-12-31";
 const STEP = 9; // Jumlah data per halaman
 const MAX_PAGES = 1; // Jumlah maksimum halaman yang akan discan
 
+// Konfigurasi Retry System
+const MAX_RETRIES = 3; // Maksimal retry per operasi
+const RETRY_DELAY = 5000; // Delay 5 detik sebelum retry
+const PAGE_TIMEOUT = 60000; // Timeout 60 detik untuk load halaman
+
 const OUT = path.resolve("output");
 const IMG_DIR = path.join(OUT, "images");
 const CHECKPOINT_FILE = path.join(OUT, "checkpoint.json");
 fs.mkdirSync(IMG_DIR, { recursive: true }); // Buat folder jika belum ada
 
 const sleep = ms => new Promise(r => setTimeout(r, ms)); // Fungsi delay / sleep
+
+// Fungsi retry wrapper untuk operasi yang bisa gagal
+async function retryOperation(operation, operationName, maxRetries = MAX_RETRIES) {
+  let lastError;
+  
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (error) {
+      lastError = error;
+      const isNetworkError = 
+        error.message.includes('net::ERR') ||
+        error.message.includes('Navigation') ||
+        error.message.includes('timeout') ||
+        error.message.includes('disconnected') ||
+        error.message.includes('Protocol error');
+      
+      if (isNetworkError && attempt < maxRetries) {
+        console.log(`⚠️  ${operationName} gagal (attempt ${attempt}/${maxRetries}): ${error.message}`);
+        console.log(`🔄 Retry dalam ${RETRY_DELAY/1000} detik...`);
+        await sleep(RETRY_DELAY);
+      } else if (!isNetworkError) {
+        // Jika bukan network error, langsung throw
+        throw error;
+      }
+    }
+  }
+  
+  // Jika semua retry gagal
+  console.log(`❌ ${operationName} gagal setelah ${maxRetries} percobaan`);
+  throw lastError;
+}
 
 // Fungsi untuk load checkpoint
 function loadCheckpoint() {
@@ -93,20 +130,22 @@ function formatTanggalIndo(dateStr) {
 
 async function downloadImage(page, imgUrl, savePath) // Fungsi untuk download gambar dari browser dan simpan ke disk
  {
-  //Menjalankan kode di dalam browser, bukan di Node.js
-  const buffer = await page.evaluate(async (url) => {
-    const res = await fetch(url, { credentials: "include" });
-    const arr = await res.arrayBuffer();
-    return Array.from(new Uint8Array(arr));
-  }, imgUrl);
+  return await retryOperation(async () => {
+    //Menjalankan kode di dalam browser, bukan di Node.js
+    const buffer = await page.evaluate(async (url) => {
+      const res = await fetch(url, { credentials: "include" });
+      const arr = await res.arrayBuffer();
+      return Array.from(new Uint8Array(arr));
+    }, imgUrl);
 
-  const data = Buffer.from(buffer);
-  fs.writeFileSync(savePath, data);
+    const data = Buffer.from(buffer);
+    fs.writeFileSync(savePath, data);
 
-  return {
-    size: data.length,
-    sha256: sha256(data),
-  };
+    return {
+      size: data.length,
+      sha256: sha256(data),
+    };
+  }, `Download gambar ${path.basename(savePath)}`);
 }
 
 // Jalankan browser
@@ -122,6 +161,10 @@ async function downloadImage(page, imgUrl, savePath) // Fungsi untuk download ga
 
   // Buka tab baru
   const page = await browser.newPage();
+  
+  // Set timeout untuk halaman
+  page.setDefaultTimeout(PAGE_TIMEOUT);
+  page.setDefaultNavigationTimeout(PAGE_TIMEOUT);
 
  // Set User-Agent agar terlihat seperti Chrome asli
   await page.setUserAgent(
@@ -149,23 +192,30 @@ async function downloadImage(page, imgUrl, savePath) // Fungsi untuk download ga
       `${BASE_URL}/home/cari/${DATE_FROM}/${DATE_TO}/all/all/all/null${offset}`;
 
     console.log("OPEN LIST:", listUrl);
-    await page.goto(listUrl, { waitUntil: "networkidle2" }); 
+    
+    // Retry untuk membuka halaman list
+    await retryOperation(async () => {
+      await page.goto(listUrl, { waitUntil: "networkidle2" });
+    }, `Membuka halaman list ${p + 1}`);
+    
     await sleep(1500 + Math.random() * 2000); //Delay acak agar tidak seperti bot (1,5 - 3,5 sec)
 
   // Mengambil semua data berita dari halaman
-    const cards = await page.evaluate(() => {
-      return Array.from(document.querySelectorAll(".row-cards .card")).map(card => {
-        //Ambil judul dan link detail
-        const titleEl = card.querySelector(".text-muted a"); 
-        const title = titleEl?.innerText.trim() || null;
-        const detailUrl = titleEl?.href || null;
+    const cards = await retryOperation(async () => {
+      return await page.evaluate(() => {
+        return Array.from(document.querySelectorAll(".row-cards .card")).map(card => {
+          //Ambil judul dan link detail
+          const titleEl = card.querySelector(".text-muted a"); 
+          const title = titleEl?.innerText.trim() || null;
+          const detailUrl = titleEl?.href || null;
 
-        const media = card.querySelector(".d-flex a.text-default")?.innerText || null; //Ambil nama media
-        const date = card.querySelector(".d-flex small")?.innerText || null; //Ambil tanggal berita
+          const media = card.querySelector(".d-flex a.text-default")?.innerText || null; //Ambil nama media
+          const date = card.querySelector(".d-flex small")?.innerText || null; //Ambil tanggal berita
 
-        return { title, detailUrl, media, date }; //Hasilnya setiap berita disimpan sebagai object
+          return { title, detailUrl, media, date }; //Hasilnya setiap berita disimpan sebagai object
+        });
       });
-    });
+    }, `Mengambil data cards halaman ${p + 1}`);
 
   // Program masuk ke setiap page berita satu per satu.
     for (let i = 0; i < cards.length; i++) {
@@ -183,18 +233,23 @@ async function downloadImage(page, imgUrl, savePath) // Fungsi untuk download ga
       console.log(`  OPEN DETAIL: ${item.detailUrl}`);
 
   // Buka halaman detail berita dan mengambil semua gambarnya.
-      await page.goto(item.detailUrl, { waitUntil: "networkidle2" }); //Menunggu halaman benar-benar selesai (networkidle2)
+      await retryOperation(async () => {
+        await page.goto(item.detailUrl, { waitUntil: "networkidle2" });
+      }, `Membuka detail berita ${i + 1}`);
+      
       await sleep(1200 + Math.random() * 1500);
 
   //Ambil semua gambar di halaman detail
-      const images = await page.evaluate(() => {
-        return Array.from(
-          document.querySelectorAll("a.aimage-zoom img")
-        ).map(img => ({
-          src: img.src,
-          filename: img.closest("a")?.dataset?.gambar_filename || null
-        }));
-      });
+      const images = await retryOperation(async () => {
+        return await page.evaluate(() => {
+          return Array.from(
+            document.querySelectorAll("a.aimage-zoom img")
+          ).map(img => ({
+            src: img.src,
+            filename: img.closest("a")?.dataset?.gambar_filename || null
+          }));
+        });
+      }, `Mengambil gambar dari berita ${i + 1}`);
 
       if (!images.length) continue; //Kalau tidak ada gambar → berita dilewati
 
